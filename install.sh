@@ -17,8 +17,12 @@ pip install -r requirements.txt
 
 echo "[2.5/4] Setting up Configuration..."
 if [ ! -f .env ]; then
-    cp .env.example .env
-    echo "Generated .env file with default settings."
+cat << 'EOF' > .env
+APP_PORT=80
+APP_USERNAME=muis24
+APP_PASSWORD=master123
+EOF
+    echo "Generated .env file automatically."
 fi
 
 # Load port from .env
