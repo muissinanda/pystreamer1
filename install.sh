@@ -42,7 +42,7 @@ After=network.target
 [Service]
 User=$CURRENT_USER
 WorkingDirectory=$APP_DIR
-Environment="PATH=$APP_DIR/venv/bin"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:$APP_DIR/venv/bin"
 ExecStart=$APP_DIR/venv/bin/uvicorn main:app --host 0.0.0.0 --port $APP_PORT
 Restart=always
 
