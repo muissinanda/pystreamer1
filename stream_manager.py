@@ -85,9 +85,10 @@ class StreamManager:
             "-i", input_url,
             "-c", "copy",
             "-f", "hls",
-            "-hls_time", "6",
-            "-hls_list_size", "15", 
-            "-hls_flags", "delete_segments+temp_file",
+            "-hls_time", "8",
+            "-hls_list_size", "25", 
+            "-max_muxing_queue_size", "4096",
+            "-hls_flags", "delete_segments+temp_file+cgop",
             output_file
         ]
 

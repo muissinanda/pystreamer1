@@ -132,7 +132,9 @@ async def serve_hls(request: Request, channel_id: str, filename: str):
     headers = {}
     m_type = "video/mp2t"
     if filename.endswith(".m3u8"):
-        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        headers["Pragma"] = "no-cache"
+        headers["Expires"] = "0"
         m_type = "application/vnd.apple.mpegurl"
         
     return FileResponse(file_path, headers=headers, media_type=m_type)
