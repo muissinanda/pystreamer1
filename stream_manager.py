@@ -87,7 +87,7 @@ class StreamManager:
             "-f", "hls",
             "-hls_time", "6",
             "-hls_list_size", "15", 
-            "-hls_flags", "delete_segments",
+            "-hls_flags", "delete_segments+temp_file",
             output_file
         ]
 

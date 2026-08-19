@@ -130,10 +130,12 @@ async def serve_hls(request: Request, channel_id: str, filename: str):
     traffic_tracking[channel_id] = traffic_tracking.get(channel_id, 0) + file_size
     
     headers = {}
+    m_type = "video/mp2t"
     if filename.endswith(".m3u8"):
         headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        m_type = "application/vnd.apple.mpegurl"
         
-    return FileResponse(file_path, headers=headers)
+    return FileResponse(file_path, headers=headers, media_type=m_type)
 
 @app.post("/add")
 async def add_channel(name: str = Form(...), input_url: str = Form(...), username: str = Depends(verify_credentials)):
