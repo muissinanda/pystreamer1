@@ -11,7 +11,7 @@ class StreamManager:
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
         
-        # RAM-Disk Directory (/dev/shm sangat aman, 100% di RAM)
+        # RAM-Disk Directory
         self.output_dir = "/dev/shm/pystreamer_hls"
         os.makedirs(self.output_dir, exist_ok=True)
         
@@ -73,14 +73,16 @@ class StreamManager:
         
         output_file = os.path.join(channel_dir, "stream.m3u8")
 
+        # hls_time 1 (1 detik per pecahan - SANGAT KECIL)
+        # Cloudflare akan menganggap ini seperti memuat aset gambar kecil di website
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
             "-rw_timeout", "10000000", "-fflags", "+genpts+discardcorrupt", 
             "-i", input_url, "-c", "copy",
             "-f", "hls", 
-            "-hls_time", "2", 
-            "-hls_list_size", "4", 
+            "-hls_time", "1", 
+            "-hls_list_size", "6", 
             "-hls_flags", "delete_segments+append_list+omit_endlist",
             "-hls_segment_type", "mpegts",
             output_file
@@ -94,12 +96,10 @@ class StreamManager:
         with sqlite3.connect(self.db_path) as conn:
             conn.cursor().execute("INSERT INTO channels (id, name, input_url, target_status) VALUES (?, ?, ?, 'stopped')", (channel_id, name, input_url))
         return channel_id
-
     def start_stream(self, channel_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET target_status = 'active' WHERE id = ?", (channel_id,))
         self._spawn_ffmpeg(channel_id)
         return True
-
     def stop_stream(self, channel_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET target_status = 'stopped' WHERE id = ?", (channel_id,))
         process = self.processes.get(channel_id)
@@ -108,26 +108,20 @@ class StreamManager:
             try: process.wait(timeout=3)
             except: process.kill()
             del self.processes[channel_id]
-            
         channel_dir = os.path.join(self.output_dir, channel_id)
-        if os.path.exists(channel_dir):
-            shutil.rmtree(channel_dir)
-            
+        if os.path.exists(channel_dir): shutil.rmtree(channel_dir)
         return True
-
     def restart_stream(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
         time.sleep(0.5) 
         self.start_stream(channel_id)
         return True
-
     def edit_channel(self, channel_id: str, name: str, input_url: str) -> bool:
         channel = self.get_channel(channel_id)
         if not channel: return False
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET name = ?, input_url = ? WHERE id = ?", (name, input_url, channel_id))
         if channel["status"] == "active": self.restart_stream(channel_id)
         return True
-
     def get_channel(self, channel_id: str):
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -138,7 +132,6 @@ class StreamManager:
                 proc = self.processes.get(channel_id)
                 status = "active" if proc and proc.poll() is None else "error"
             return {"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status}
-
     def get_all_channels(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -151,7 +144,6 @@ class StreamManager:
                 status = "active" if proc and proc.poll() is None else "error"
             result.append({"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status})
         return result
-
     def delete_channel(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("DELETE FROM channels WHERE id = ?", (channel_id,))

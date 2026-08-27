@@ -1,7 +1,7 @@
 ﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 from stream_manager import StreamManager
@@ -20,7 +20,6 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.mount("/hls", StaticFiles(directory=manager.output_dir), name="hls")
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, username: str = Depends(verify_credentials)):
@@ -51,3 +50,20 @@ async def play_channel(request: Request, channel_id: str):
     channel = manager.get_channel(channel_id)
     if not channel: raise HTTPException(status_code=404)
     return templates.TemplateResponse(request=request, name="player.html", context={"channel": channel})
+
+@app.get("/hls/{channel_id}/{filename}")
+async def serve_hls(channel_id: str, filename: str):
+    file_path = os.path.join(manager.output_dir, channel_id, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    headers = {}
+    if filename.endswith(".m3u8"):
+        # Wajib: Beritahu Cloudflare agar TIDAK PERNAH mencache playlist
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif filename.endswith(".ts"):
+        # Wajib: Beritahu Cloudflare agar MENG-CACHE video chunk ini!
+        # Cloudflare akan otomatis menganggap ini aset website (seperti gambar)
+        headers["Cache-Control"] = "public, max-age=3600"
+        
+    return FileResponse(file_path, headers=headers)
