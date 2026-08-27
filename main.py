@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
@@ -6,6 +6,9 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 from stream_manager import StreamManager
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="Python Restreamer")
 
