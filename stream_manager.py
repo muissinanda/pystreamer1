@@ -1,21 +1,21 @@
-import subprocess
+﻿import subprocess
 import os
 import uuid
-import shutil
 import sqlite3
 import threading
 import time
-from typing import Dict, Any, List
+import asyncio
+from typing import Dict, Any, List, Tuple
 
 class StreamManager:
-    def __init__(self, output_dir: str = "hls_output", db_path: str = "restreamer.db"):
-        self.output_dir = output_dir
-        # Store DB relative to this file
+    def __init__(self, db_path: str = "restreamer.db"):
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
-        self.processes: Dict[str, subprocess.Popen] = {}
         
-        os.makedirs(os.path.join(base_dir, self.output_dir), exist_ok=True)
+        self.processes: Dict[str, subprocess.Popen] = {}
+        self.subscribers: Dict[str, List[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
+        self.last_read_time: Dict[str, float] = {}
+        
         self._init_db()
         self._start_monitor_thread()
 
@@ -34,7 +34,6 @@ class StreamManager:
 
     def _start_monitor_thread(self):
         def monitor():
-            # Wait a few seconds on startup before restarting streams
             time.sleep(2)
             while True:
                 try:
@@ -54,8 +53,22 @@ class StreamManager:
 
         for ch_id in active_ids:
             proc = self.processes.get(ch_id)
+            needs_restart = False
+            
             if proc is None or proc.poll() is not None:
-                # Process is dead or never started, restart it
+                needs_restart = True
+            else:
+                last_time = self.last_read_time.get(ch_id, 0)
+                if last_time > 0 and (time.time() - last_time > 30):
+                    needs_restart = True
+                    print(f"Zombie detected! Stream {ch_id} is frozen (no pipe output for 30s). Killing it...")
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2)
+                    except:
+                        proc.kill()
+
+            if needs_restart:
                 print(f"Auto-restarting channel {ch_id}")
                 self._spawn_ffmpeg(ch_id)
 
@@ -68,36 +81,68 @@ class StreamManager:
                 return
             input_url = row[0]
 
-        channel_dir = os.path.join(os.path.dirname(__file__), self.output_dir, channel_id)
-        os.makedirs(channel_dir, exist_ok=True)
-        output_file = os.path.join(channel_dir, "stream.m3u8")
-
         cmd = [
             "ffmpeg",
             "-y",
-            # Konfigurasi Anti-Hang & Auto-Reconnect untuk input HTTP (Sangat penting untuk IPTV)
             "-reconnect", "1",
             "-reconnect_at_eof", "1",
             "-reconnect_streamed", "1",
             "-reconnect_delay_max", "2",
-            "-rw_timeout", "10000000", # Timeout 10 detik agar FFmpeg tidak hang jika koneksi sumber putus
-            "-fflags", "+genpts+discardcorrupt", # Memperbaiki timestamp yang rusak dan membuang frame korup
+            "-rw_timeout", "10000000", 
+            "-fflags", "+genpts+discardcorrupt", 
             "-i", input_url,
             "-c", "copy",
-            "-f", "hls",
-            "-hls_time", "8",
-            "-hls_list_size", "25", 
-            "-max_muxing_queue_size", "4096",
-            "-hls_flags", "delete_segments+temp_file+cgop",
-            output_file
+            "-f", "mpegts",
+            "pipe:1"
         ]
 
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL
         )
         self.processes[channel_id] = process
+        self.last_read_time[channel_id] = time.time()
+        
+        threading.Thread(target=self._broadcast_stream, args=(channel_id, process), daemon=True).start()
+
+    def _broadcast_stream(self, channel_id: str, process: subprocess.Popen):
+        print(f"Started broadcasting memory stream for {channel_id}")
+        
+        try:
+            while process.poll() is None:
+                chunk = process.stdout.read(65536)
+                if not chunk:
+                    break
+                    
+                self.last_read_time[channel_id] = time.time()
+                
+                subs = self.subscribers.get(channel_id, [])
+                for q, loop in subs.copy():
+                    def _put(q=q, chunk=chunk):
+                        try:
+                            q.put_nowait(chunk)
+                        except asyncio.QueueFull:
+                            pass
+                            
+                    if not loop.is_closed():
+                        loop.call_soon_threadsafe(_put)
+        except Exception as e:
+            print(f"Broadcast thread error for {channel_id}: {e}")
+        finally:
+            print(f"Broadcast ended for {channel_id}")
+
+    def add_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id not in self.subscribers:
+            self.subscribers[channel_id] = []
+        self.subscribers[channel_id].append((queue, loop))
+
+    def remove_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id in self.subscribers:
+            try:
+                self.subscribers[channel_id].remove((queue, loop))
+            except ValueError:
+                pass
 
     def add_channel(self, name: str, input_url: str) -> str:
         channel_id = str(uuid.uuid4())
@@ -131,16 +176,11 @@ class StreamManager:
                 process.kill()
             del self.processes[channel_id]
             
-        # Hapus semua file video (m3u8 & ts) agar player (seperti VLC) langsung terputus (Error 404)
-        channel_dir = os.path.join(os.path.dirname(__file__), self.output_dir, channel_id)
-        if os.path.exists(channel_dir):
-            shutil.rmtree(channel_dir, ignore_errors=True)
-            
         return True
 
     def restart_stream(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
-        time.sleep(0.5) # Beri sedikit waktu agar file terhapus dan port benar-benar bersih
+        time.sleep(0.5) 
         self.start_stream(channel_id)
         return True
 
@@ -214,10 +254,5 @@ class StreamManager:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
             conn.commit()
-
-        # Clean up files
-        channel_dir = os.path.join(os.path.dirname(__file__), self.output_dir, channel_id)
-        if os.path.exists(channel_dir):
-            shutil.rmtree(channel_dir, ignore_errors=True)
             
         return True

@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Player - {{ channel.name }} - Nano Stream</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -32,7 +32,7 @@
             {% if channel.status == 'active' %}
             <span class="flex items-center gap-2 text-sm text-emerald-500 bg-emerald-950/30 px-3 py-1 rounded-full border border-emerald-900">
                 <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                LIVE
+                LIVE MEMORY
             </span>
             {% else %}
             <span class="text-sm text-gray-500 px-3 py-1 rounded-full border border-gray-800">OFFLINE</span>
@@ -60,15 +60,15 @@
         </div>
 
         <div class="w-full mt-6 bg-gray-900 rounded-xl p-4 border border-gray-800">
-            <h3 class="text-sm text-gray-400 mb-2 font-medium">HLS Output URL</h3>
+            <h3 class="text-sm text-gray-400 mb-2 font-medium">MPEG-TS Live Stream URL</h3>
             <div class="flex">
-                <input type="text" readonly value="{{ request.base_url }}hls/{{ channel.id }}/stream.m3u8" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
+                <input type="text" readonly value="{{ request.base_url }}stream/{{ channel.id }}" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
                 <button onclick="copyUrl()" class="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-r-lg border border-l-0 border-gray-800 transition-colors text-sm font-medium">
                     Copy
                 </button>
             </div>
             <p class="text-xs text-gray-500 mt-3">
-                You can use this URL in VLC Player, OBS Studio (Media Source), or any HLS compatible player.
+                You can use this URL in VLC Player, OTT Navigator, or any player that supports MPEG-TS HTTP Streams. Zero latency!
             </p>
         </div>
     </main>
@@ -84,33 +84,26 @@
 
         {% if channel.status == 'active' %}
         var video = document.getElementById('video');
-        var videoSrc = '/hls/{{ channel.id }}/stream.m3u8';
+        var videoSrc = '/stream/{{ channel.id }}';
         
-        // Wait a little bit for the first segment to be generated before playing
-        setTimeout(() => {
-            if (Hls.isSupported()) {
-                var hls = new Hls({
-                    debug: false,
-                    manifestLoadingTimeOut: 10000,
-                    // HLS.js Anti-Buffering Configuration
-                    liveSyncDurationCount: 5,       // Start playback 5 segments behind live edge (safe buffer)
-                    maxBufferLength: 60,            // Keep up to 60 seconds of video downloaded ahead
-                    maxMaxBufferLength: 120,        // Absolute max buffer
-                    liveMaxLatencyDurationCount: 15 // Allow up to 15 segments of latency before jumping
-                });
-                hls.loadSource(videoSrc);
-                hls.attachMedia(video);
-                hls.on(Hls.Events.MANIFEST_PARSED, function() {
-                    video.play();
-                });
-            }
-            else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                video.src = videoSrc;
-                video.addEventListener('loadedmetadata', function() {
-                    video.play();
-                });
-            }
-        }, 1500); // 1.5s delay to allow ffmpeg to write
+        if (mpegts.getFeatureList().mseLivePlayback) {
+            var player = mpegts.createPlayer({
+                type: 'mpegts',  
+                isLive: true,
+                url: videoSrc
+            }, {
+                enableStashBuffer: false,
+                liveBufferLatencyChasing: true
+            });
+            player.attachMediaElement(video);
+            player.load();
+            player.play();
+        } else {
+            video.src = videoSrc;
+            video.addEventListener('loadedmetadata', function() {
+                video.play();
+            });
+        }
         {% endif %}
     </script>
 </body>
