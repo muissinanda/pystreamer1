@@ -1,7 +1,7 @@
 ﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 from stream_manager import StreamManager
@@ -20,6 +20,7 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/hls", StaticFiles(directory=manager.output_dir), name="hls")
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request, username: str = Depends(verify_credentials)):
@@ -50,23 +51,3 @@ async def play_channel(request: Request, channel_id: str):
     channel = manager.get_channel(channel_id)
     if not channel: raise HTTPException(status_code=404)
     return templates.TemplateResponse(request=request, name="player.html", context={"channel": channel})
-
-@app.get("/stream/{channel_id}")
-async def stream_video(request: Request, channel_id: str):
-    channel = manager.get_channel(channel_id)
-    if not channel or channel["status"] != "active": raise HTTPException(status_code=400)
-    
-    loop = asyncio.get_running_loop()
-    # Antrean raksasa (500 chunks = ~32MB) agar sanggup menelan ledakan Backlog tanpa meluap
-    q = asyncio.Queue(maxsize=500)
-    manager.add_subscriber(channel_id, q, loop)
-
-    async def event_generator():
-        try:
-            while True:
-                if await request.is_disconnected(): break
-                yield await q.get()
-        except asyncio.CancelledError: pass
-        finally: manager.remove_subscriber(channel_id, q, loop)
-
-    return StreamingResponse(event_generator(), media_type="video/mp2t", headers={"Cache-Control": "no-cache", "Transfer-Encoding": "chunked"})

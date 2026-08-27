@@ -4,18 +4,19 @@ import uuid
 import sqlite3
 import threading
 import time
-import asyncio
-from typing import Dict, Any, List, Tuple
-from collections import deque
+import shutil
 
 class StreamManager:
     def __init__(self, db_path: str = "restreamer.db"):
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
-        self.processes: Dict[str, subprocess.Popen] = {}
-        self.subscribers: Dict[str, List[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
-        self.last_read_time: Dict[str, float] = {}
-        self.backlogs: Dict[str, deque] = {} # RING BUFFER BACKLOG
+        
+        # RAM-Disk Directory (/dev/shm sangat aman, 100% di RAM)
+        self.output_dir = "/dev/shm/pystreamer_hls"
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        self.processes = {}
+        
         self._init_db()
         self._start_monitor_thread()
 
@@ -41,16 +42,21 @@ class StreamManager:
         for ch_id in active_ids:
             proc = self.processes.get(ch_id)
             needs_restart = False
+            
+            hls_file = os.path.join(self.output_dir, ch_id, "stream.m3u8")
+            
             if proc is None or proc.poll() is not None:
                 needs_restart = True
             else:
-                last_time = self.last_read_time.get(ch_id, 0)
-                if last_time > 0 and (time.time() - last_time > 30):
-                    needs_restart = True
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=2)
-                    except: proc.kill()
+                if os.path.exists(hls_file):
+                    mtime = os.path.getmtime(hls_file)
+                    if (time.time() - mtime) > 15:
+                        needs_restart = True
+                        try:
+                            proc.terminate()
+                            proc.wait(timeout=2)
+                        except: proc.kill()
+                    
             if needs_restart:
                 self._spawn_ffmpeg(ch_id)
 
@@ -60,67 +66,40 @@ class StreamManager:
             if not row: return
             input_url = row[0]
 
+        channel_dir = os.path.join(self.output_dir, channel_id)
+        if os.path.exists(channel_dir):
+            shutil.rmtree(channel_dir)
+        os.makedirs(channel_dir, exist_ok=True)
+        
+        output_file = os.path.join(channel_dir, "stream.m3u8")
+
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
             "-rw_timeout", "10000000", "-fflags", "+genpts+discardcorrupt", 
-            "-i", input_url, "-c", "copy", "-f", "mpegts", "pipe:1"
+            "-i", input_url, "-c", "copy",
+            "-f", "hls", 
+            "-hls_time", "2", 
+            "-hls_list_size", "4", 
+            "-hls_flags", "delete_segments+append_list+omit_endlist",
+            "-hls_segment_type", "mpegts",
+            output_file
         ]
 
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.processes[channel_id] = process
-        self.last_read_time[channel_id] = time.time()
-        # 300 chunks x 64KB = ~19 MB Backlog (Buffer anti ngelag)
-        self.backlogs[channel_id] = deque(maxlen=300) 
-        threading.Thread(target=self._broadcast_stream, args=(channel_id, process), daemon=True).start()
-
-    def _broadcast_stream(self, channel_id: str, process: subprocess.Popen):
-        try:
-            while process.poll() is None:
-                chunk = process.stdout.read(65536)
-                if not chunk: break
-                self.last_read_time[channel_id] = time.time()
-                
-                # Simpan ke backlog
-                if channel_id in self.backlogs:
-                    self.backlogs[channel_id].append(chunk)
-                
-                subs = self.subscribers.get(channel_id, [])
-                for q, loop in subs.copy():
-                    def _put(q=q, chunk=chunk):
-                        try: q.put_nowait(chunk)
-                        except asyncio.QueueFull: pass
-                    if not loop.is_closed(): loop.call_soon_threadsafe(_put)
-        except Exception: pass
-
-    def add_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-        if channel_id not in self.subscribers: self.subscribers[channel_id] = []
-        self.subscribers[channel_id].append((queue, loop))
-        
-        # BLAST BACKLOG: Injeksi data massal ke penonton baru!
-        if channel_id in self.backlogs:
-            backlog_copy = list(self.backlogs[channel_id])
-            def _inject_backlog():
-                for c in backlog_copy:
-                    try: queue.put_nowait(c)
-                    except asyncio.QueueFull: pass
-            if not loop.is_closed():
-                loop.call_soon_threadsafe(_inject_backlog)
-
-    def remove_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
-        if channel_id in self.subscribers:
-            try: self.subscribers[channel_id].remove((queue, loop))
-            except ValueError: pass
 
     def add_channel(self, name: str, input_url: str) -> str:
         channel_id = str(uuid.uuid4())
         with sqlite3.connect(self.db_path) as conn:
             conn.cursor().execute("INSERT INTO channels (id, name, input_url, target_status) VALUES (?, ?, ?, 'stopped')", (channel_id, name, input_url))
         return channel_id
+
     def start_stream(self, channel_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET target_status = 'active' WHERE id = ?", (channel_id,))
         self._spawn_ffmpeg(channel_id)
         return True
+
     def stop_stream(self, channel_id: str) -> bool:
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET target_status = 'stopped' WHERE id = ?", (channel_id,))
         process = self.processes.get(channel_id)
@@ -129,19 +108,27 @@ class StreamManager:
             try: process.wait(timeout=3)
             except: process.kill()
             del self.processes[channel_id]
+            
+        channel_dir = os.path.join(self.output_dir, channel_id)
+        if os.path.exists(channel_dir):
+            shutil.rmtree(channel_dir)
+            
         return True
+
     def restart_stream(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
         time.sleep(0.5) 
         self.start_stream(channel_id)
         return True
+
     def edit_channel(self, channel_id: str, name: str, input_url: str) -> bool:
         channel = self.get_channel(channel_id)
         if not channel: return False
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("UPDATE channels SET name = ?, input_url = ? WHERE id = ?", (name, input_url, channel_id))
         if channel["status"] == "active": self.restart_stream(channel_id)
         return True
-    def get_channel(self, channel_id: str) -> Any:
+
+    def get_channel(self, channel_id: str):
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.cursor().execute("SELECT * FROM channels WHERE id = ?", (channel_id,)).fetchone()
@@ -151,7 +138,8 @@ class StreamManager:
                 proc = self.processes.get(channel_id)
                 status = "active" if proc and proc.poll() is None else "error"
             return {"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status}
-    def get_all_channels(self) -> List[Any]:
+
+    def get_all_channels(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.cursor().execute("SELECT * FROM channels").fetchall()
@@ -163,6 +151,7 @@ class StreamManager:
                 status = "active" if proc and proc.poll() is None else "error"
             result.append({"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status})
         return result
+
     def delete_channel(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
         with sqlite3.connect(self.db_path) as conn: conn.cursor().execute("DELETE FROM channels WHERE id = ?", (channel_id,))

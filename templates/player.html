@@ -5,22 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Player - {{ channel.name }} - Nano Stream</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        gray: { 900: '#111827', 950: '#030712' }
-                    }
-                }
-            }
-        }
+        tailwind.config = { darkMode: 'class', theme: { extend: { colors: { gray: { 900: '#111827', 950: '#030712' } } } } }
     </script>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col">
-
     <nav class="bg-gray-900 border-b border-gray-800 p-4">
         <div class="max-w-5xl mx-auto flex items-center justify-between">
             <div class="flex items-center gap-4">
@@ -31,79 +21,48 @@
             </div>
             {% if channel.status == 'active' %}
             <span class="flex items-center gap-2 text-sm text-emerald-500 bg-emerald-950/30 px-3 py-1 rounded-full border border-emerald-900">
-                <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                LIVE MEMORY
+                <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>RAM-DISK HLS
             </span>
             {% else %}
             <span class="text-sm text-gray-500 px-3 py-1 rounded-full border border-gray-800">OFFLINE</span>
             {% endif %}
         </div>
     </nav>
-
     <main class="flex-grow max-w-5xl w-full mx-auto p-4 flex flex-col items-center justify-center">
-        
         <div class="w-full aspect-video bg-black rounded-xl overflow-hidden border border-gray-800 shadow-xl relative">
             <video id="video" class="w-full h-full" controls autoplay muted></video>
-            
-            {% if channel.status != 'active' %}
-            <div class="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                <div class="text-center">
-                    <p class="text-xl text-gray-400 font-medium mb-4">Channel is offline</p>
-                    <form action="/start/{{ channel.id }}" method="POST">
-                        <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 px-6 rounded-lg transition-colors">
-                            Start Stream
-                        </button>
-                    </form>
-                </div>
-            </div>
-            {% endif %}
         </div>
-
         <div class="w-full mt-6 bg-gray-900 rounded-xl p-4 border border-gray-800">
-            <h3 class="text-sm text-gray-400 mb-2 font-medium">MPEG-TS Live Stream URL</h3>
+            <h3 class="text-sm text-gray-400 mb-2 font-medium">RAM-Disk HLS URL</h3>
             <div class="flex">
-                <input type="text" readonly value="{{ request.base_url }}stream/{{ channel.id }}" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
-                <button onclick="copyUrl()" class="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-r-lg border border-l-0 border-gray-800 transition-colors text-sm font-medium">
-                    Copy
-                </button>
+                <input type="text" readonly value="{{ request.base_url }}hls/{{ channel.id }}/stream.m3u8" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
+                <button onclick="document.getElementById('urlInput').select(); document.execCommand('copy'); alert('URL Copied!')" class="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-r-lg border border-l-0 border-gray-800 transition-colors text-sm font-medium">Copy</button>
             </div>
-            <p class="text-xs text-gray-500 mt-3">
-                You can use this URL in VLC Player, OTT Navigator, or any player that supports MPEG-TS HTTP Streams. Zero latency!
-            </p>
+            <p class="text-xs text-gray-500 mt-3">File HLS ini murni disimpan di dalam RAM Linux (/dev/shm). Anti Buffer dari Cloudflare, 0% beban SSD!</p>
         </div>
     </main>
-
     <script>
-        function copyUrl() {
-            var copyText = document.getElementById("urlInput");
-            copyText.select();
-            copyText.setSelectionRange(0, 99999);
-            navigator.clipboard.writeText(copyText.value);
-            alert("URL Copied!");
-        }
-
         {% if channel.status == 'active' %}
         var video = document.getElementById('video');
-        var videoSrc = '/stream/{{ channel.id }}';
+        var videoSrc = '/hls/{{ channel.id }}/stream.m3u8';
         
-        if (mpegts.getFeatureList().mseLivePlayback) {
-            var player = mpegts.createPlayer({
-                type: 'mpegts',  
-                isLive: true,
-                url: videoSrc
-            }, {
-                enableStashBuffer: false,
-                liveBufferLatencyChasing: true
-            });
-            player.attachMediaElement(video);
-            player.load();
-            player.play();
-        } else {
-            video.src = videoSrc;
-            video.addEventListener('loadedmetadata', function() {
-                video.play();
-            });
-        }
+        setTimeout(() => {
+            if (Hls.isSupported()) {
+                var hls = new Hls({
+                    debug: false,
+                    manifestLoadingTimeOut: 10000,
+                    liveSyncDurationCount: 3, 
+                    maxBufferLength: 30,      
+                    maxMaxBufferLength: 60    
+                });
+                hls.loadSource(videoSrc);
+                hls.attachMedia(video);
+                hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play(); });
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = videoSrc;
+                video.addEventListener('loadedmetadata', function() { video.play(); });
+            }
+        }, 1500);
         {% endif %}
     </script>
 </body>
