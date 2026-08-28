@@ -83,8 +83,10 @@ class StreamManager:
             "-f", "hls", 
             "-hls_time", "4", 
             "-hls_list_size", "20", 
-            "-hls_flags", "delete_segments+append_list+omit_endlist",
+            "-hls_flags", "delete_segments+omit_endlist",
             "-hls_segment_type", "mpegts",
+            "-strftime", "1",
+            "-hls_segment_filename", os.path.join(channel_dir, "seg-%s-%%04d.ts"),
             output_file
         ]
 
