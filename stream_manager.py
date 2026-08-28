@@ -6,6 +6,7 @@ import threading
 import time
 import asyncio
 from typing import Dict, Any, List, Tuple
+from collections import deque
 
 class StreamManager:
     def __init__(self, db_path: str = "restreamer.db"):
@@ -14,6 +15,7 @@ class StreamManager:
         self.processes: Dict[str, subprocess.Popen] = {}
         self.subscribers: Dict[str, List[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
         self.last_read_time: Dict[str, float] = {}
+        self.backlogs: Dict[str, deque] = {} # RING BUFFER BACKLOG
         self._init_db()
         self._start_monitor_thread()
 
@@ -58,7 +60,6 @@ class StreamManager:
             if not row: return
             input_url = row[0]
 
-        # PURE PASSTHROUGH TO PIPE
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
@@ -69,6 +70,8 @@ class StreamManager:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.processes[channel_id] = process
         self.last_read_time[channel_id] = time.time()
+        # 150 chunks x 64KB = ~9.6 MB Backlog (Sangat penting agar VLC langsung menyala!)
+        self.backlogs[channel_id] = deque(maxlen=150) 
         threading.Thread(target=self._broadcast_stream, args=(channel_id, process), daemon=True).start()
 
     def _broadcast_stream(self, channel_id: str, process: subprocess.Popen):
@@ -77,6 +80,10 @@ class StreamManager:
                 chunk = process.stdout.read(65536)
                 if not chunk: break
                 self.last_read_time[channel_id] = time.time()
+                
+                # Simpan ke memori backlog
+                if channel_id in self.backlogs:
+                    self.backlogs[channel_id].append(chunk)
                 
                 subs = self.subscribers.get(channel_id, [])
                 for q, loop in subs.copy():
@@ -89,6 +96,16 @@ class StreamManager:
     def add_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         if channel_id not in self.subscribers: self.subscribers[channel_id] = []
         self.subscribers[channel_id].append((queue, loop))
+        
+        # BLAST BACKLOG: Injeksi data massal agar VLC/OTT lolos proses "Probing" instan
+        if channel_id in self.backlogs:
+            backlog_copy = list(self.backlogs[channel_id])
+            def _inject_backlog():
+                for c in backlog_copy:
+                    try: queue.put_nowait(c)
+                    except asyncio.QueueFull: pass
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(_inject_backlog)
 
     def remove_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         if channel_id in self.subscribers:

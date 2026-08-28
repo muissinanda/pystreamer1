@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
@@ -73,4 +73,4 @@ async def stream_video(request: Request, channel_id: str):
         except asyncio.CancelledError: pass
         finally: manager.remove_subscriber(channel_id, q, loop)
 
-    return StreamingResponse(event_generator(), media_type="video/mp2t", headers={"Cache-Control": "no-cache", "Transfer-Encoding": "chunked"})
+    return StreamingResponse(event_generator(), media_type="video/mp2t", headers={"Cache-Control": "no-cache, no-store", "Pragma": "no-cache"})
