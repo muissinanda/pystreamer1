@@ -1,4 +1,4 @@
-﻿import subprocess
+import subprocess
 import os
 import uuid
 import sqlite3
@@ -82,8 +82,10 @@ class StreamManager:
             "-f", "hls", 
             "-hls_time", "2", 
             "-hls_list_size", "5", 
-            "-hls_flags", "delete_segments+append_list+omit_endlist",
+            "-hls_flags", "delete_segments+omit_endlist",
             "-hls_segment_type", "mpegts",
+            "-strftime", "1",
+            "-hls_segment_filename", os.path.join(channel_dir, "seg-%s-%%04d.ts"),
             output_file
         ]
 
