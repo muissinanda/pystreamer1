@@ -1,7 +1,7 @@
 ﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 from stream_manager import StreamManager
@@ -56,23 +56,21 @@ async def play_channel(request: Request, channel_id: str):
     if not channel: raise HTTPException(status_code=404)
     return templates.TemplateResponse(request=request, name="player.html", context={"channel": channel})
 
-@app.get("/hls/{channel_id}/{filename}")
-async def serve_hls(channel_id: str, filename: str):
-    file_path = os.path.join(manager.output_dir, channel_id, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-        
-    headers = {}
-    if filename.endswith(".m3u8"):
-        # Super strict anti-cache for playlist so OTT Navigator never gets stuck
-        headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
-        headers["Pragma"] = "no-cache"
-        headers["Expires"] = "0"
-        # Optional: add custom header to force Cloudflare to bypass cache
-        headers["CDN-Cache-Control"] = "no-store"
-    elif filename.endswith(".ts"):
-        # Tell Cloudflare to treat this exactly like a website image/asset
-        headers["Cache-Control"] = "public, max-age=3600, s-maxage=3600"
-        headers["Content-Type"] = "video/mp2t"
-        
-    return FileResponse(file_path, headers=headers)
+@app.get("/stream/{channel_id}")
+async def stream_video(request: Request, channel_id: str):
+    channel = manager.get_channel(channel_id)
+    if not channel or channel["status"] != "active": raise HTTPException(status_code=400)
+    
+    loop = asyncio.get_running_loop()
+    q = asyncio.Queue(maxsize=100)
+    manager.add_subscriber(channel_id, q, loop)
+
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected(): break
+                yield await q.get()
+        except asyncio.CancelledError: pass
+        finally: manager.remove_subscriber(channel_id, q, loop)
+
+    return StreamingResponse(event_generator(), media_type="video/mp2t", headers={"Cache-Control": "no-cache", "Transfer-Encoding": "chunked"})

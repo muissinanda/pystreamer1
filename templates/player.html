@@ -1,11 +1,11 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Player - {{ channel.name }} - Nano Stream</title>
+    <title>Player - {{ channel.name }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mpegts.js@latest/dist/mpegts.min.js"></script>
     <script>
         tailwind.config = { darkMode: 'class', theme: { extend: { colors: { gray: { 900: '#111827', 950: '#030712' } } } } }
     </script>
@@ -20,8 +20,8 @@
                 <h1 class="text-xl font-medium">{{ channel.name }}</h1>
             </div>
             {% if channel.status == 'active' %}
-            <span class="flex items-center gap-2 text-sm text-emerald-500 bg-emerald-950/30 px-3 py-1 rounded-full border border-emerald-900">
-                <span class="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>RAM-DISK HLS
+            <span class="flex items-center gap-2 text-sm text-blue-500 bg-blue-950/30 px-3 py-1 rounded-full border border-blue-900">
+                <span class="flex h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>PASSTHROUGH
             </span>
             {% else %}
             <span class="text-sm text-gray-500 px-3 py-1 rounded-full border border-gray-800">OFFLINE</span>
@@ -33,36 +33,33 @@
             <video id="video" class="w-full h-full" controls autoplay muted></video>
         </div>
         <div class="w-full mt-6 bg-gray-900 rounded-xl p-4 border border-gray-800">
-            <h3 class="text-sm text-gray-400 mb-2 font-medium">RAM-Disk HLS URL</h3>
+            <h3 class="text-sm text-gray-400 mb-2 font-medium">Direct Stream URL</h3>
             <div class="flex">
-                <input type="text" readonly value="{{ request.base_url }}hls/{{ channel.id }}/stream.m3u8" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
+                <input type="text" readonly value="{{ request.base_url }}stream/{{ channel.id }}" class="flex-grow bg-gray-950 border border-gray-800 rounded-l-lg px-4 py-2 font-mono text-sm focus:outline-none text-blue-400" id="urlInput">
                 <button onclick="document.getElementById('urlInput').select(); document.execCommand('copy'); alert('URL Copied!')" class="bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-r-lg border border-l-0 border-gray-800 transition-colors text-sm font-medium">Copy</button>
             </div>
-            <p class="text-xs text-gray-500 mt-3">File HLS ini murni disimpan di dalam RAM Linux (/dev/shm). Anti Buffer dari Cloudflare, 0% beban SSD!</p>
+            <p class="text-xs text-gray-500 mt-3">Aliran MPEG-TS Mentah (Raw Passthrough). Tanpa modifikasi HLS, tanpa file sampah, murni proxy pipa.</p>
         </div>
     </main>
     <script>
         {% if channel.status == 'active' %}
         var video = document.getElementById('video');
-        var videoSrc = '/hls/{{ channel.id }}/stream.m3u8';
+        var videoSrc = '/stream/{{ channel.id }}';
         
-        setTimeout(() => {
-            if (Hls.isSupported()) {
-                var hls = new Hls({
-                    debug: false,
-                    manifestLoadingTimeOut: 10000,
-                    liveSyncDurationCount: 3, 
-                    maxBufferLength: 30,      
-                    maxMaxBufferLength: 60    
-                });
-                hls.loadSource(videoSrc);
-                hls.attachMedia(video);
-                hls.on(Hls.Events.MANIFEST_PARSED, function() { video.play(); });
-            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                video.src = videoSrc;
-                video.addEventListener('loadedmetadata', function() { video.play(); });
-            }
-        }, 1500);
+        if (mpegts.getFeatureList().mseLivePlayback) {
+            var player = mpegts.createPlayer({
+                type: 'mse',
+                isLive: true,
+                url: videoSrc
+            }, {
+                enableStashBuffer: false,
+                liveBufferLatencyChasing: true,
+                liveBufferLatencyMaxLatency: 2.0,
+            });
+            player.attachMediaElement(video);
+            player.load();
+            player.play();
+        }
         {% endif %}
     </script>
 </body>

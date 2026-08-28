@@ -4,19 +4,16 @@ import uuid
 import sqlite3
 import threading
 import time
-import shutil
+import asyncio
+from typing import Dict, Any, List, Tuple
 
 class StreamManager:
     def __init__(self, db_path: str = "restreamer.db"):
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
-        
-        # RAM-Disk Directory (/dev/shm sangat aman, 100% di RAM)
-        self.output_dir = "/dev/shm/pystreamer_hls"
-        os.makedirs(self.output_dir, exist_ok=True)
-        
-        self.processes = {}
-        
+        self.processes: Dict[str, subprocess.Popen] = {}
+        self.subscribers: Dict[str, List[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
+        self.last_read_time: Dict[str, float] = {}
         self._init_db()
         self._start_monitor_thread()
 
@@ -42,21 +39,16 @@ class StreamManager:
         for ch_id in active_ids:
             proc = self.processes.get(ch_id)
             needs_restart = False
-            
-            hls_file = os.path.join(self.output_dir, ch_id, "stream.m3u8")
-            
             if proc is None or proc.poll() is not None:
                 needs_restart = True
             else:
-                if os.path.exists(hls_file):
-                    mtime = os.path.getmtime(hls_file)
-                    if (time.time() - mtime) > 15:
-                        needs_restart = True
-                        try:
-                            proc.terminate()
-                            proc.wait(timeout=2)
-                        except: proc.kill()
-                    
+                last_time = self.last_read_time.get(ch_id, 0)
+                if last_time > 0 and (time.time() - last_time > 30):
+                    needs_restart = True
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=2)
+                    except: proc.kill()
             if needs_restart:
                 self._spawn_ffmpeg(ch_id)
 
@@ -66,30 +58,42 @@ class StreamManager:
             if not row: return
             input_url = row[0]
 
-        channel_dir = os.path.join(self.output_dir, channel_id)
-        if os.path.exists(channel_dir):
-            shutil.rmtree(channel_dir)
-        os.makedirs(channel_dir, exist_ok=True)
-        
-        output_file = os.path.join(channel_dir, "stream.m3u8")
-
-        # hls_time 1 (1 detik per pecahan - SANGAT KECIL)
-        # split_by_time memaksa pecahan 1 detik persis walau tanpa keyframe!
+        # PURE PASSTHROUGH TO PIPE
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
             "-rw_timeout", "10000000", "-fflags", "+genpts+discardcorrupt", 
-            "-i", input_url, "-c", "copy",
-            "-f", "hls", 
-            "-hls_time", "1", 
-            "-hls_list_size", "5", 
-            "-hls_flags", "delete_segments+append_list+omit_endlist+split_by_time",
-            "-hls_segment_type", "mpegts",
-            output_file
+            "-i", input_url, "-c", "copy", "-f", "mpegts", "pipe:1"
         ]
 
-        process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.processes[channel_id] = process
+        self.last_read_time[channel_id] = time.time()
+        threading.Thread(target=self._broadcast_stream, args=(channel_id, process), daemon=True).start()
+
+    def _broadcast_stream(self, channel_id: str, process: subprocess.Popen):
+        try:
+            while process.poll() is None:
+                chunk = process.stdout.read(65536)
+                if not chunk: break
+                self.last_read_time[channel_id] = time.time()
+                
+                subs = self.subscribers.get(channel_id, [])
+                for q, loop in subs.copy():
+                    def _put(q=q, chunk=chunk):
+                        try: q.put_nowait(chunk)
+                        except asyncio.QueueFull: pass
+                    if not loop.is_closed(): loop.call_soon_threadsafe(_put)
+        except Exception: pass
+
+    def add_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id not in self.subscribers: self.subscribers[channel_id] = []
+        self.subscribers[channel_id].append((queue, loop))
+
+    def remove_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id in self.subscribers:
+            try: self.subscribers[channel_id].remove((queue, loop))
+            except ValueError: pass
 
     def add_channel(self, name: str, input_url: str) -> str:
         channel_id = str(uuid.uuid4())
@@ -108,8 +112,6 @@ class StreamManager:
             try: process.wait(timeout=3)
             except: process.kill()
             del self.processes[channel_id]
-        channel_dir = os.path.join(self.output_dir, channel_id)
-        if os.path.exists(channel_dir): shutil.rmtree(channel_dir)
         return True
     def restart_stream(self, channel_id: str) -> bool:
         self.stop_stream(channel_id)
