@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
+from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
@@ -45,6 +45,11 @@ async def stop_channel(channel_id: str, username: str = Depends(verify_credentia
     manager.stop_stream(channel_id)
     return RedirectResponse(url="/", status_code=303)
 
+@app.post("/restart/{channel_id}")
+async def restart_channel(channel_id: str, username: str = Depends(verify_credentials)):
+    manager.restart_stream(channel_id)
+    return RedirectResponse(url="/", status_code=303)
+
 @app.get("/play/{channel_id}", response_class=HTMLResponse)
 async def play_channel(request: Request, channel_id: str):
     channel = manager.get_channel(channel_id)
@@ -59,11 +64,15 @@ async def serve_hls(channel_id: str, filename: str):
         
     headers = {}
     if filename.endswith(".m3u8"):
-        # Wajib: Beritahu Cloudflare agar TIDAK PERNAH mencache playlist
-        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        # Super strict anti-cache for playlist so OTT Navigator never gets stuck
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
+        headers["Pragma"] = "no-cache"
+        headers["Expires"] = "0"
+        # Optional: add custom header to force Cloudflare to bypass cache
+        headers["CDN-Cache-Control"] = "no-store"
     elif filename.endswith(".ts"):
-        # Wajib: Beritahu Cloudflare agar MENG-CACHE video chunk ini!
-        # Cloudflare akan otomatis menganggap ini aset website (seperti gambar)
-        headers["Cache-Control"] = "public, max-age=3600"
+        # Tell Cloudflare to treat this exactly like a website image/asset
+        headers["Cache-Control"] = "public, max-age=3600, s-maxage=3600"
+        headers["Content-Type"] = "video/mp2t"
         
     return FileResponse(file_path, headers=headers)

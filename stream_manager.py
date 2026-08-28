@@ -1,4 +1,4 @@
-﻿import subprocess
+import subprocess
 import os
 import uuid
 import sqlite3
@@ -74,7 +74,7 @@ class StreamManager:
         output_file = os.path.join(channel_dir, "stream.m3u8")
 
         # hls_time 1 (1 detik per pecahan - SANGAT KECIL)
-        # Cloudflare akan menganggap ini seperti memuat aset gambar kecil di website
+        # split_by_time memaksa pecahan 1 detik persis walau tanpa keyframe!
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
@@ -82,8 +82,8 @@ class StreamManager:
             "-i", input_url, "-c", "copy",
             "-f", "hls", 
             "-hls_time", "1", 
-            "-hls_list_size", "6", 
-            "-hls_flags", "delete_segments+append_list+omit_endlist",
+            "-hls_list_size", "5", 
+            "-hls_flags", "delete_segments+append_list+omit_endlist+split_by_time",
             "-hls_segment_type", "mpegts",
             output_file
         ]
