@@ -1,4 +1,4 @@
-import subprocess
+﻿import subprocess
 import os
 import uuid
 import sqlite3
@@ -11,7 +11,7 @@ class StreamManager:
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
         
-        # RAM-Disk Directory (Kembali ke RAM karena sangat ringan dengan list_size 5)
+        # RAM-Disk Directory (/dev/shm sangat aman, 100% di RAM)
         self.output_dir = "/dev/shm/pystreamer_hls"
         os.makedirs(self.output_dir, exist_ok=True)
         
@@ -73,19 +73,18 @@ class StreamManager:
         
         output_file = os.path.join(channel_dir, "stream.m3u8")
 
-        # KEMBALI KE PENGATURAN SUPER STABIL (hls_time 2, list_size 5)
+        # hls_time 1 (1 detik per pecahan - SANGAT KECIL)
+        # split_by_time memaksa pecahan 1 detik persis walau tanpa keyframe!
         cmd = [
             "ffmpeg", "-y", "-reconnect", "1", "-reconnect_at_eof", "1", 
             "-reconnect_streamed", "1", "-reconnect_delay_max", "2",
             "-rw_timeout", "10000000", "-fflags", "+genpts+discardcorrupt", 
             "-i", input_url, "-c", "copy",
             "-f", "hls", 
-            "-hls_time", "2", 
+            "-hls_time", "1", 
             "-hls_list_size", "5", 
-            "-hls_flags", "delete_segments+omit_endlist",
+            "-hls_flags", "delete_segments+append_list+omit_endlist+split_by_time",
             "-hls_segment_type", "mpegts",
-            "-strftime", "1",
-            "-hls_segment_filename", os.path.join(channel_dir, "seg-%s-%%04d.ts"),
             output_file
         ]
 

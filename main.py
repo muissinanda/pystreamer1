@@ -64,11 +64,15 @@ async def serve_hls(channel_id: str, filename: str):
         
     headers = {}
     if filename.endswith(".m3u8"):
-        # Wajib: Beritahu Cloudflare agar TIDAK PERNAH mencache playlist
-        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        # Super strict anti-cache for playlist so OTT Navigator never gets stuck
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
+        headers["Pragma"] = "no-cache"
+        headers["Expires"] = "0"
+        # Optional: add custom header to force Cloudflare to bypass cache
+        headers["CDN-Cache-Control"] = "no-store"
     elif filename.endswith(".ts"):
-        # Wajib: Beritahu Cloudflare agar MENG-CACHE video chunk ini!
-        headers["Cache-Control"] = "public, max-age=3600"
+        # Tell Cloudflare to treat this exactly like a website image/asset
+        headers["Cache-Control"] = "public, max-age=3600, s-maxage=3600"
         headers["Content-Type"] = "video/mp2t"
         
     return FileResponse(file_path, headers=headers)
