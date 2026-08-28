@@ -63,15 +63,13 @@ async def serve_hls(channel_id: str, filename: str):
         raise HTTPException(status_code=404, detail="File not found")
         
     headers = {}
-    if filename.endswith(".m3u8"):
-        # Super strict anti-cache for playlist so OTT Navigator never gets stuck
-        headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
-        headers["Pragma"] = "no-cache"
-        headers["Expires"] = "0"
-        return FileResponse(file_path, headers=headers)
+    # MATIKAN TOTAL SEMUA CACHE CLOUDFLARE UNTUK SEMUA FILE (M3U8 & TS)
+    headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
+    headers["Pragma"] = "no-cache"
+    headers["Expires"] = "0"
+    headers["CDN-Cache-Control"] = "no-store"
         
-    elif filename.endswith(".ts"):
-        # Tell Cloudflare to treat this exactly like a website image/asset
-        headers["Cache-Control"] = "public, max-age=3600, s-maxage=3600"
+    if filename.endswith(".ts"):
         headers["Content-Type"] = "video/mp2t"
-        return FileResponse(file_path, headers=headers)
+        
+    return FileResponse(file_path, headers=headers)
