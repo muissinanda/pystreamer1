@@ -11,8 +11,8 @@ class StreamManager:
         base_dir = os.path.dirname(__file__)
         self.db_path = os.path.join(base_dir, db_path)
         
-        # RAM-Disk Directory
-        self.output_dir = "/dev/shm/pystreamer_hls"
+        # Pindah kembali ke Hardisk karena /dev/shm di LXC biasanya dibatasi 64MB (yang membuat FFmpeg crash jika penuh)
+        self.output_dir = os.path.join(base_dir, "hls_output")
         os.makedirs(self.output_dir, exist_ok=True)
         
         self.processes = {}
@@ -82,7 +82,7 @@ class StreamManager:
             "-i", input_url, "-c", "copy",
             "-f", "hls", 
             "-hls_time", "4", 
-            "-hls_list_size", "30", 
+            "-hls_list_size", "20", 
             "-hls_flags", "delete_segments+append_list+omit_endlist",
             "-hls_segment_type", "mpegts",
             output_file
