@@ -81,9 +81,9 @@ class StreamManager:
             "-rw_timeout", "10000000", "-fflags", "+genpts+discardcorrupt", 
             "-i", input_url, "-c", "copy",
             "-f", "hls", 
-            "-hls_time", "1", 
+            "-hls_time", "2", 
             "-hls_list_size", "5", 
-            "-hls_flags", "delete_segments+append_list+omit_endlist+split_by_time",
+            "-hls_flags", "delete_segments+append_list+omit_endlist",
             "-hls_segment_type", "mpegts",
             output_file
         ]
