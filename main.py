@@ -68,15 +68,7 @@ async def serve_hls(channel_id: str, filename: str):
         headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
         headers["Pragma"] = "no-cache"
         headers["Expires"] = "0"
-        headers["CDN-Cache-Control"] = "no-store"
-        
-        # Inject tag ajaib agar pemutar (VLC/OTT) otomatis mundur 60 detik dari Live!
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        if "#EXTM3U" in content and "#EXT-X-START" not in content:
-            content = content.replace("#EXTM3U", "#EXTM3U\n#EXT-X-START:TIME-OFFSET=-60")
-            
-        return Response(content=content, media_type="application/vnd.apple.mpegurl", headers=headers)
+        return FileResponse(file_path, headers=headers)
         
     elif filename.endswith(".ts"):
         # Tell Cloudflare to treat this exactly like a website image/asset
