@@ -1,4 +1,4 @@
-﻿import subprocess
+import subprocess
 import os
 import uuid
 import sqlite3
@@ -87,7 +87,7 @@ class StreamManager:
             if row["target_status"] == "active":
                 proc = self.processes.get(channel_id)
                 status = "active" if proc and proc.poll() is None else "error"
-            return dict(row, status=status)
+            return {"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status}
 
     def get_all_channels(self):
         with sqlite3.connect(self.db_path) as conn:
@@ -99,7 +99,7 @@ class StreamManager:
             if row["target_status"] == "active":
                 proc = self.processes.get(row["id"])
                 status = "active" if proc and proc.poll() is None else "error"
-            result.append(dict(row, status=status))
+            result.append({"id": row["id"], "name": row["name"], "input_url": row["input_url"], "status": status})
         return result
 
     def add_channel(self, name: str, input_url: str):
