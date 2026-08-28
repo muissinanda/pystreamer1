@@ -1,16 +1,20 @@
-import subprocess
+﻿import subprocess
 import os
 import uuid
 import sqlite3
 import threading
 import time
+import asyncio
+from typing import Dict, Any, List, Tuple
+from collections import deque
 
 class StreamManager:
     def __init__(self, db_path: str = "restreamer.db"):
         self.db_path = os.path.join(os.path.dirname(__file__), db_path)
-        self.processes = {}
-        self.stream_data = {}  
-        self.conditions = {}   
+        self.processes: Dict[str, subprocess.Popen] = {}
+        self.subscribers: Dict[str, List[Tuple[asyncio.Queue, asyncio.AbstractEventLoop]]] = {}
+        self.last_read_time: Dict[str, float] = {}
+        self.backlogs: Dict[str, deque] = {} 
         self._init_db()
         threading.Thread(target=self._monitor, daemon=True).start()
 
@@ -27,10 +31,20 @@ class StreamManager:
                     active_ids = [r[0] for r in conn.execute("SELECT id FROM channels WHERE target_status = 'active'").fetchall()]
                 for ch_id in active_ids:
                     proc = self.processes.get(ch_id)
+                    needs_restart = False
                     if not proc or proc.poll() is not None:
+                        needs_restart = True
+                    else:
+                        last_time = self.last_read_time.get(ch_id, 0)
+                        if last_time > 0 and (time.time() - last_time > 30):
+                            needs_restart = True
+                            try:
+                                proc.terminate()
+                                proc.wait(timeout=2)
+                            except: proc.kill()
+                    if needs_restart:
                         self._start_ffmpeg(ch_id)
-            except Exception:
-                pass
+            except Exception: pass
 
     def _start_ffmpeg(self, channel_id: str):
         with sqlite3.connect(self.db_path) as conn:
@@ -50,33 +64,52 @@ class StreamManager:
         
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.processes[channel_id] = proc
+        self.last_read_time[channel_id] = time.time()
         
-        if channel_id not in self.conditions:
-            self.conditions[channel_id] = threading.Condition()
-            self.stream_data[channel_id] = bytearray()
+        # Simpan 80 chunk x 64KB = ~5MB backlog
+        self.backlogs[channel_id] = deque(maxlen=80) 
             
         threading.Thread(target=self._read_stdout, args=(channel_id, proc), daemon=True).start()
 
     def _read_stdout(self, channel_id, proc):
-        cond = self.conditions[channel_id]
-        data = self.stream_data[channel_id]
-        
-        # Bersihkan buffer lama jika ini adalah restart
-        with cond:
-            data.clear()
-            
+        backlog = self.backlogs.get(channel_id)
         try:
             while proc.poll() is None:
                 chunk = proc.stdout.read(65536)
                 if not chunk: break
                 
-                with cond:
-                    data.extend(chunk)
-                    # Simpan 5MB buffer di RAM agar pemutar bisa langsung menyala (Probing lolos instan)
-                    if len(data) > 5 * 1024 * 1024:
-                        del data[:len(data) - (5 * 1024 * 1024)]
-                    cond.notify_all()
+                self.last_read_time[channel_id] = time.time()
+                if backlog is not None:
+                    backlog.append(chunk)
+                
+                subs = self.subscribers.get(channel_id, [])
+                for q, loop in subs.copy():
+                    def _put(q=q, chunk=chunk):
+                        try: q.put_nowait(chunk)
+                        except asyncio.QueueFull: pass
+                    if not loop.is_closed():
+                        loop.call_soon_threadsafe(_put)
         except: pass
+
+    def add_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id not in self.subscribers:
+            self.subscribers[channel_id] = []
+        self.subscribers[channel_id].append((queue, loop))
+        
+        # Tembakkan backlog ke queue pemirsa baru secara instan
+        if channel_id in self.backlogs:
+            backlog_copy = list(self.backlogs[channel_id])
+            def _inject():
+                for c in backlog_copy:
+                    try: queue.put_nowait(c)
+                    except asyncio.QueueFull: pass
+            if not loop.is_closed():
+                loop.call_soon_threadsafe(_inject)
+
+    def remove_subscriber(self, channel_id: str, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+        if channel_id in self.subscribers:
+            try: self.subscribers[channel_id].remove((queue, loop))
+            except ValueError: pass
 
     def get_channel(self, channel_id: str):
         with sqlite3.connect(self.db_path) as conn:

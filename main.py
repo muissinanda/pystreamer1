@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, HTMLResponse, StreamingResponse
@@ -61,32 +61,19 @@ async def stream_video(request: Request, channel_id: str):
     channel = manager.get_channel(channel_id)
     if not channel or channel["status"] != "active": raise HTTPException(status_code=404)
     
-    cond = manager.conditions.get(channel_id)
-    data = manager.stream_data.get(channel_id)
-    if not cond or data is None: raise HTTPException(status_code=500)
+    loop = asyncio.get_running_loop()
+    # Queue size 200 * 64KB = ~12.8MB per client
+    q = asyncio.Queue(maxsize=200)
+    manager.add_subscriber(channel_id, q, loop)
 
     async def stream_generator():
-        # Kirim backlog pertama kali secara penuh
-        with cond:
-            yield bytes(data)
-            last_len = len(data)
-            
-        while True:
-            if await request.is_disconnected(): break
-            
-            # Gunakan asyncio.sleep agar tidak memblokir event loop FastAPI
-            await asyncio.sleep(0.1)
-            
-            with cond:
-                current_len = len(data)
-                if current_len > last_len:
-                    # Ambil data baru
-                    chunk = bytes(data[last_len:current_len])
-                    last_len = current_len
-                    yield chunk
-                elif current_len < last_len:
-                    # Terjadi reset buffer (FFmpeg restart atau data terpotong)
-                    last_len = current_len
+        try:
+            while True:
+                if await request.is_disconnected(): break
+                yield await q.get()
+        except asyncio.CancelledError: pass
+        finally:
+            manager.remove_subscriber(channel_id, q, loop)
 
     headers = {
         "Cache-Control": "no-cache, no-store, must-revalidate",
