@@ -51,9 +51,9 @@
                 var hls = new Hls({
                     debug: false,
                     manifestLoadingTimeOut: 10000,
-                    liveSyncDurationCount: 15, // Mundur 15 pecahan (sekitar 60 detik) dari Live
-                    maxBufferLength: 90,      
-                    maxMaxBufferLength: 120    
+                    liveSyncDurationCount: 3, 
+                    maxBufferLength: 30,      
+                    maxMaxBufferLength: 60    
                 });
                 hls.loadSource(videoSrc);
                 hls.attachMedia(video);

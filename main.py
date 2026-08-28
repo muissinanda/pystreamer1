@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Request, Form, Depends, HTTPException
+﻿from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse, Response
+from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import asyncio
 from stream_manager import StreamManager
@@ -63,13 +63,12 @@ async def serve_hls(channel_id: str, filename: str):
         raise HTTPException(status_code=404, detail="File not found")
         
     headers = {}
-    # MATIKAN TOTAL SEMUA CACHE CLOUDFLARE UNTUK SEMUA FILE (M3U8 & TS)
-    headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0"
-    headers["Pragma"] = "no-cache"
-    headers["Expires"] = "0"
-    headers["CDN-Cache-Control"] = "no-store"
-        
-    if filename.endswith(".ts"):
+    if filename.endswith(".m3u8"):
+        # Wajib: Beritahu Cloudflare agar TIDAK PERNAH mencache playlist
+        headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif filename.endswith(".ts"):
+        # Wajib: Beritahu Cloudflare agar MENG-CACHE video chunk ini!
+        headers["Cache-Control"] = "public, max-age=3600"
         headers["Content-Type"] = "video/mp2t"
         
     return FileResponse(file_path, headers=headers)
